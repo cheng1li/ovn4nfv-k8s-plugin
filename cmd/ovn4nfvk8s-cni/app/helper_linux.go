@@ -40,6 +40,11 @@ func renameLink(curName, newName string) error {
 func setupInterface(netns ns.NetNS, containerID, ifName, macAddress, ipAddress, gatewayIP, defaultGateway string, mtu int) (*current.Interface, *current.Interface, error) {
 	hostIface := &current.Interface{}
 	contIface := &current.Interface{}
+	if strings.HasPrefix(ifName, "vhost") {
+		hostIface.Name = containerID[:14] + "0"
+		contIface.Mac = macAddress
+		return hostIface, contIface, nil
+	}
 
 	var oldHostVethName string
 	err := netns.Do(func(hostNS ns.NetNS) error {
@@ -132,6 +137,9 @@ var ConfigureInterface = func(args *skel.CmdArgs, namespace, podName, macAddress
 		fmt.Sprintf("external_ids:iface-id=%s", ifaceID),
 		fmt.Sprintf("external_ids:ip_address=%s", ipAddress),
 		fmt.Sprintf("external_ids:sandbox=%s", args.ContainerID),
+	}
+	if strings.HasPrefix(interfaceName, "vhost") {
+		ovsArgs = append(ovsArgs, "type=dpdkvhostuser")
 	}
 
 	var out []byte
