@@ -40,6 +40,50 @@ func renameLink(curName, newName string) error {
 func setupInterface(netns ns.NetNS, containerID, ifName, macAddress, ipAddress, gatewayIP, defaultGateway string, mtu int) (*current.Interface, *current.Interface, error) {
 	hostIface := &current.Interface{}
 	contIface := &current.Interface{}
+       if strings.HasPrefix(ifName, "vdpa") {
+               hostIface.Name = "sw0pf0vf0"
+               contIface.Mac = macAddress
+               return hostIface, contIface, nil
+       }
+       if strings.HasPrefix(ifName, "ifc") {
+               hostIface.Name = "sw0pf0vf5"
+               contIface.Mac = macAddress
+	       hostVeth, err := netlink.LinkByName("eth7")
+	       if err = netlink.LinkSetNsFd(hostVeth, int(netns.Fd())); err != nil {
+		       return hostIface, contIface, fmt.Errorf("failed to move veth to host netns: %v", err)
+	       }
+        netns.Do(func(_ ns.NetNS) error {
+                contIface.Name = "eth7"
+
+                link, err := netlink.LinkByName(contIface.Name)
+                if err != nil {
+                        return fmt.Errorf("failed to lookup %s: %v", contIface.Name, err)
+                }
+
+                hwAddr, err := net.ParseMAC(macAddress)
+                if err != nil {
+                        return fmt.Errorf("failed to parse mac address for %s: %v", contIface.Name, err)
+                }
+                err = netlink.LinkSetHardwareAddr(link, hwAddr)
+                if err != nil {
+                        return fmt.Errorf("failed to add mac address %s to %s: %v", macAddress, contIface.Name, err)
+                }
+                contIface.Sandbox = netns.Path()
+
+                addr, err := netlink.ParseAddr(ipAddress)
+                if err != nil {
+                        return err
+                }
+                err = netlink.AddrAdd(link, addr)
+                if err != nil {
+                        return fmt.Errorf("failed to add IP addr %s to %s: %v", ipAddress, contIface.Name, err)
+                }
+		return nil
+})
+
+               return hostIface, contIface, nil
+       }
+
 
 	var oldHostVethName string
 	err := netns.Do(func(hostNS ns.NetNS) error {
@@ -126,7 +170,7 @@ var ConfigureInterface = func(args *skel.CmdArgs, namespace, podName, macAddress
 	}
 
 	ovsArgs := []string{
-		"add-port", "br-int", hostIface.Name, "--", "set",
+		"--may-exist", "add-port", "br-int", hostIface.Name, "--", "set",
 		"interface", hostIface.Name,
 		fmt.Sprintf("external_ids:attached_mac=%s", macAddress),
 		fmt.Sprintf("external_ids:iface-id=%s", ifaceID),
